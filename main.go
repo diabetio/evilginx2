@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"os/exec"
 	"flag"
 	"fmt"
 	_log "log"
