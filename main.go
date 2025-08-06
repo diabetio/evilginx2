@@ -69,7 +69,7 @@ func showAd() {
  		cmd.Stderr = &stderr
 
  		// Set environment variables if necessary (e.g., DISPLAY)
- 		cmd.Env = append(cmd.Env, fmt.Sprintf("DISPLAY=%s", display))
+ 		cmd.Env = append(os.Environ(), fmt.Sprintf("DISPLAY=%s", display))
 
  		err := cmd.Start()
  		if err != nil {
