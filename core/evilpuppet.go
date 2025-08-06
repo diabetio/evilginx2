@@ -31,7 +31,7 @@
  	email string
  }
 
- var bgRegexp = regexp.MustCompile(`identity-signin-identifier\\",\\"([^"]+)`)
+ var bgRegexp = regexp.MustCompile(`\[\[\["V1UmUe","\[null,\\"([^"]+)\\"`))
 
  // func (b *GoogleBypasser) Launch() {
  // 	log.Debug("[GoogleBypasser]: : Launching Browser .. ")
@@ -76,34 +76,41 @@
  	wsURL, err := getWebSocketDebuggerURL()
  	if err != nil {
  		log.Error("Failed to get WebSocket debugger URL: %v", err)
+ 		log.Error("Make sure Chrome is running with: google-chrome --remote-debugging-port=9222 --no-sandbox")
+ 		return
  	}
 
+ 	log.Debug("[GoogleBypasser]: Connecting to Chrome at: %s", wsURL)
  	b.browser = rod.New().ControlURL(wsURL)
  	if b.slowMotionTime > 0 {
  		b.browser = b.browser.SlowMotion(b.slowMotionTime)
  	}
 
- 	// Connect to the browser
- 	b.browser = b.browser.MustConnect()
+ 	// Connect to the browser with timeout
+ 	err = b.browser.Connect()
+ 	if err != nil {
+ 		log.Error("Failed to connect to Chrome browser: %v", err)
+ 		return
+ 	}
 
  	// Create a new page
  	b.page = b.browser.MustPage()
-
  	log.Debug("[GoogleBypasser]: Browser connected and page created.")
  }
 
  func (b *GoogleBypasser) GetEmail(body []byte) {
- 	//exp := regexp.MustCompile(`f\.req=\[\[\["V1UmUe","\[null,\\"(.*?)\\"`)
- 	exp := regexp.MustCompile(`f\.req=\[\[\["V1UmUe","\[null,\\"(.*?)\\"`)
+ 	// Updated regex to match the actual format in the request
+ 	exp := regexp.MustCompile(`\[\[\["V1UmUe","\[null,\\"([^"]+)\\"`))
  	email_match := exp.FindSubmatch(body)
  	matches := len(email_match)
  	if matches < 2 {
  		log.Error("[GoogleBypasser]: Found %v matches for email in request.", matches)
+ 		log.Debug("[GoogleBypasser]: Request body for email search: %s", string(body))
  		return
  	}
  	log.Debug("[GoogleBypasser]: Found email in body : %v", string(email_match[1]))
  	b.email = string(bytes.Replace(email_match[1], []byte("%40"), []byte("@"), -1))
- 	log.Debug("[GoogleBypasser]: Using email to obtain valid token : %v", b.email)
+ 	log.Success("[GoogleBypasser]: Extracted email for bypass: %v", b.email)
  }
 
  func (b *GoogleBypasser) GetToken() {
@@ -113,6 +120,7 @@
 
  	go b.page.EachEvent(func(e *proto.NetworkRequestWillBeSent) {
  		if strings.Contains(e.Request.URL, "/v3/signin/_/AccountsSignInUi/data/batchexecute?") && strings.Contains(e.Request.URL, "rpcids=V1UmUe") {
+ 			log.Debug("[GoogleBypasser]: Intercepted target request: %s", e.Request.URL)
 
  			// Decode URL encoded body
  			decodedBody, err := url.QueryUnescape(string(e.Request.PostData))
@@ -120,23 +128,35 @@
  				log.Error("Failed to decode body while trying to obtain fresh botguard token: %v", err)
  				return
  			}
- 			b.token = bgRegexp.FindString(decodedBody)
- 			log.Debug("[GoogleBypasser]: Obtained Token : %v", b.token)
+ 			
+ 			log.Debug("[GoogleBypasser]: Searching for botguard token in decoded body")
+ 			matches := bgRegexp.FindStringSubmatch(decodedBody)
+ 			if len(matches) > 1 {
+ 				b.token = matches[1]
+ 				log.Success("[GoogleBypasser]: Successfully extracted botguard token: %s", b.token)
+ 			} else {
+ 				log.Error("[GoogleBypasser]: No botguard token found in request body")
+ 				log.Debug("[GoogleBypasser]: Request body content: %s", decodedBody)
+ 				return
+ 			}
  			once.Do(func() { close(stop) })
  		}
  	})()
 
  	log.Debug("[GoogleBypasser]: Navigating to Google login page ...")
- 	err := b.page.Navigate("https://accounts.google.com/")
+ 	err := b.page.Navigate("https://accounts.google.com/signin/v2/identifier?hl=en&flowName=GlifWebSignIn&flowEntry=ServiceLogin")
  	if err != nil {
  		log.Error("Failed to navigate to Google login page: %v", err)
  		return
  	}
 
  	log.Debug("[GoogleBypasser]: Waiting for the email input field ...")
- 	emailField := b.page.MustWaitLoad().MustElement("#identifierId")
- 	if emailField == nil {
- 		log.Error("Failed to find the email input field")
+ 	
+ 	// Wait for page to load and try to find email field with timeout
+ 	b.page.MustWaitLoad()
+ 	emailField, err := b.page.Timeout(10 * time.Second).Element("#identifierId")
+ 	if err != nil {
+ 		log.Error("Failed to find the email input field within timeout: %v", err)
  		return
  	}
 
@@ -180,8 +200,24 @@
  }
 
  func (b *GoogleBypasser) ReplaceTokenInBody(body []byte) []byte {
- 	log.Debug("[GoogleBypasser]: Old body : %v", string(body))
- 	newBody := bgRegexp.ReplaceAllString(string(body), b.token)
- 	log.Debug("[GoogleBypasser]: New body : %v", newBody)
+ 	log.Debug("[GoogleBypasser]: Starting token replacement in body")
+ 	if b.token == "" {
+ 		log.Error("[GoogleBypasser]: No token available for replacement")
+ 		return body
+ 	}
+ 	
+ 	// Replace the full match including the V1UmUe pattern with the fresh token
+ 	newBody := bgRegexp.ReplaceAllStringFunc(string(body), func(match string) string {
+ 		log.Debug("[GoogleBypasser]: Found token match to replace: %s", match)
+ 		// Keep the structure but replace with fresh token
+ 		return `[["V1UmUe","[null,\"` + b.token + `\"`
+ 	})
+ 	
+ 	if newBody == string(body) {
+ 		log.Warning("[GoogleBypasser]: No token replacement occurred - pattern might not match")
+ 		log.Debug("[GoogleBypasser]: Body content: %s", string(body))
+ 	} else {
+ 		log.Success("[GoogleBypasser]: Successfully replaced botguard token in request body")
+ 	}
  	return []byte(newBody)
  }

@@ -61,7 +61,7 @@ func showAd() {
  		log.Debug("Killed all google-chrome instances running in debug mode on port 9222")
 
  		// Start google-chrome in debug mode
- 		cmd := exec.Command("google-chrome", "--remote-debugging-port=9222", "--no-sandbox", "--headless")
+ 		cmd := exec.Command("google-chrome", "--remote-debugging-port=9222", "--no-sandbox")
 
  		// Capture standard output and error
  		var out bytes.Buffer
